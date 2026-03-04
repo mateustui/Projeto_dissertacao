@@ -36,6 +36,7 @@ class LLMOrchestrator:
         self._waiting = False
         self._wait_until = 0.0
         self._mem_pos: dict[str, np.ndarray] = {}
+        self._held_object_name: str | None = None
 
     def parse_command(self, command: str) -> dict[str, Any] | None:
         try:
@@ -48,10 +49,18 @@ class LLMOrchestrator:
                     thinking_config=types.ThinkingConfig(thinking_budget=0),
                 ),
             )
-            text = resp.text.replace("```json", "").replace("```", "").strip()
+            raw_text = (resp.text or "").strip()
+            if not raw_text:
+                self.logger.warning("Gemini retornou resposta vazia.")
+                return None
+
+            text = raw_text.replace("```json", "").replace("```", "").strip()
             parsed = json.loads(text)
             if not isinstance(parsed, dict):
+                self.logger.warning("Resposta do Gemini nao esta no formato JSON esperado.")
                 return None
+            self.logger.system("Resposta do Gemini:")
+            self.logger.system(json.dumps(parsed, ensure_ascii=False, indent=2))
             return parsed
         except Exception as exc:
             self.logger.error(f"Erro ao interpretar: {exc}")
@@ -90,7 +99,10 @@ class LLMOrchestrator:
                 return self.robot.go_home()
 
             if func_name == "open_gripper":
-                return self.garra.abrir()
+                result = self.garra.abrir()
+                if result.success:
+                    self._held_object_name = None
+                return result
 
             if func_name == "close_gripper":
                 return self.garra.fechar()
@@ -110,11 +122,25 @@ class LLMOrchestrator:
             if func_name == "pick_object":
                 obj_name = args.get("object_name", "")
                 self.logger.action(f"Localizando '{obj_name}'...")
+                det_result = self.vision.detectar()
+                if det_result.success and det_result.data:
+                    self.logger.vision(det_result.message)
                 result = self.vision.localizar(obj_name)
                 if not result.success:
+                    if obj_name in self._mem_pos:
+                        self.logger.warning(
+                            f"Visao falhou para '{obj_name}'. Usando posicao em memoria: {self._mem_pos[obj_name]}"
+                        )
+                        pick_result = self.robot.iniciar_pegar(np.array(self._mem_pos[obj_name], dtype=np.float64))
+                        if pick_result.success:
+                            self._held_object_name = obj_name
+                        return pick_result
                     return result
                 self.logger.vision(result.message)
-                return self.robot.iniciar_pegar(result.data)
+                pick_result = self.robot.iniciar_pegar(result.data)
+                if pick_result.success:
+                    self._held_object_name = obj_name
+                return pick_result
 
             if func_name == "place_at_position":
                 def f(v: Any, default: float) -> float:
@@ -127,7 +153,11 @@ class LLMOrchestrator:
                 y = f(args.get("y", 0.0), 0.0)
                 z = f(args.get("z", 0.1), 0.1)
                 pos = np.array([x, y, z], dtype=np.float64)
-                return self.robot.iniciar_depositar(pos)
+                place_result = self.robot.iniciar_depositar(pos)
+                if place_result.success and self._held_object_name:
+                    self._mem_pos[self._held_object_name] = np.array(pos, dtype=np.float64)
+                    self._held_object_name = None
+                return place_result
 
             if func_name == "place_on_object":
                 target_name = args.get("target_name", "")
@@ -136,7 +166,11 @@ class LLMOrchestrator:
                 if not result.success:
                     return result
                 self.logger.vision(result.message)
-                return self.robot.iniciar_depositar(result.data)
+                place_result = self.robot.iniciar_depositar(result.data)
+                if place_result.success and self._held_object_name:
+                    self._mem_pos[self._held_object_name] = np.array(result.data, dtype=np.float64)
+                    self._held_object_name = None
+                return place_result
 
             if func_name == "get_robot_state":
                 state = self.robot.get_state()
@@ -183,7 +217,11 @@ class LLMOrchestrator:
                 if key not in self._mem_pos:
                     return ActionResult(False, f"Posicao '{key}' nao encontrada na memoria. Salve primeiro.")
                 pos = np.array(self._mem_pos[key], dtype=np.float64)
-                return self.robot.iniciar_depositar(pos)
+                place_result = self.robot.iniciar_depositar(pos)
+                if place_result.success and self._held_object_name:
+                    self._mem_pos[self._held_object_name] = np.array(pos, dtype=np.float64)
+                    self._held_object_name = None
+                return place_result
 
             return ActionResult(False, f"Funcao desconhecida: {func_name}")
 
