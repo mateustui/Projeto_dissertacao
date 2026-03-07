@@ -74,7 +74,6 @@ class UnifiedGUI:
         self.photo1 = None
         self.photo2 = None
         self._stt: LocalSTT | None = None
-        self._stt_lock = threading.Lock()
         self._mic_state = "idle"
         self._mic_recording = False
         self._mic_chunks: list[np.ndarray] = []
@@ -82,7 +81,6 @@ class UnifiedGUI:
         self._mic_worker: threading.Thread | None = None
 
         self._build()
-        threading.Thread(target=self._preload_stt, daemon=True).start()
 
     def _build(self) -> None:
         self.root = tk.Tk()
@@ -439,24 +437,13 @@ class UnifiedGUI:
         self.history_idx = len(self.history)
 
     def _ensure_stt(self) -> LocalSTT:
-        with self._stt_lock:
-            if self._stt is None:
-                self._stt = LocalSTT(
-                    model_size=settings.stt_model_size,
-                    device=settings.stt_device,
-                    compute_type=settings.stt_compute_type,
-                    beam_size=settings.stt_beam_size,
-                    vad_filter=settings.stt_vad_filter,
-                )
+        if self._stt is None:
+            self._stt = LocalSTT(
+                model_size=settings.stt_model_size,
+                device=settings.stt_device,
+                compute_type=settings.stt_compute_type,
+            )
         return self._stt
-
-    def _preload_stt(self) -> None:
-        try:
-            self._ensure_stt()
-            self.root.after(0, lambda: self._log("STT local pronto.", "system"))
-        except Exception as exc:
-            msg = f"STT indisponivel: {exc}"
-            self.root.after(0, lambda m=msg: self._log(m, "warning"))
 
     def _refresh_mic_button(self) -> None:
         if self._mic_state == "recording":
@@ -522,9 +509,6 @@ class UnifiedGUI:
             if audio.ndim > 1:
                 audio = audio.mean(axis=1)
             audio = audio.astype(np.float32, copy=False)
-            if audio.size < settings.mic_sample_rate // 5:
-                self.root.after(0, lambda: self._log("Audio muito curto para transcricao.", "warning"))
-                return
 
             transcribed = self._ensure_stt().transcribe_array(
                 audio=audio,

@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: orquestrador
+Version: 0.1.0
+Summary: UR3 orchestrator with Gemini Robotics
+Requires-Python: >=3.11
+Provides-Extra: stt
+Requires-Dist: faster-whisper>=1.1.1; extra == "stt"
+Requires-Dist: sounddevice>=0.5.2; extra == "stt"
+Requires-Dist: soundfile>=0.13.1; extra == "stt"

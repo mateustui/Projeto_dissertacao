@@ -24,6 +24,43 @@ Este repositório mantém o arquivo original e adiciona uma versão modular para
 python3 orquestrador_refatorado.py
 ```
 
+## Comando por voz (STT local)
+
+Instale as dependencias opcionais de voz:
+
+```bash
+pip install ".[stt]"
+```
+
+Na GUI, use o botao `MIC`:
+- 1 clique inicia a gravacao.
+- 2 clique para e transcreve localmente.
+- O texto transcrito e enviado como comando normal ao Gemini Robotics.
+
+Variaveis opcionais no `.env`:
+
+```bash
+MIC_SAMPLE_RATE=16000
+MIC_CHANNELS=1
+STT_LANGUAGE=pt
+STT_MODEL_SIZE=base
+STT_DEVICE=cpu
+STT_COMPUTE_TYPE=int8
+STT_BEAM_SIZE=1
+STT_VAD_FILTER=false
+```
+
+Para reduzir latencia de transcricao:
+- Use `STT_MODEL_SIZE=base` (ou `tiny` para max velocidade).
+- Mantenha `STT_BEAM_SIZE=1`.
+- Deixe `STT_VAD_FILTER=false` se o ambiente for silencioso.
+- A primeira inicializacao ja pre-carrega o modelo em background.
+
+Para maior qualidade de transcricao em CPU potente:
+- Use `STT_MODEL_SIZE=large-v3`.
+- Mantenha `STT_COMPUTE_TYPE=int8_float32`.
+- Use `STT_BEAM_SIZE=3` (ou 5 se quiser maximizar precisao).
+
 Se a cena nao estiver na raiz do projeto, configure no `.env`:
 
 ```bash
@@ -50,3 +87,7 @@ mypy src
 - Alterações de cinemática e trajetória devem ficar em `adapters/sim/ur3.py`.
 - Ajustes de visão/triangulação devem ficar em `adapters/vision/stereo.py` e `core/geometry.py`.
 - Evite lógica de negócio na GUI; mantenha GUI como camada de apresentação.
+
+
+## Comandos que funcionam
+- inverta a posicao dos cubos vermelho e verde usando o circulo verde como posicao temporaria
