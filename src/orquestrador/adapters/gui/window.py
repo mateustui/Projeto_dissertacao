@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import threading
 import time
 from queue import Empty, Queue
 
 import cv2
+import numpy as np
 import tkinter as tk
 from PIL import Image, ImageTk
 
+from orquestrador.adapters.stt import LocalSTT
 from orquestrador.config import settings
 
 RESET_SIM_CMD = "__reset_simulation__"
@@ -70,8 +73,16 @@ class UnifiedGUI:
 
         self.photo1 = None
         self.photo2 = None
+        self._stt: LocalSTT | None = None
+        self._stt_lock = threading.Lock()
+        self._mic_state = "idle"
+        self._mic_recording = False
+        self._mic_chunks: list[np.ndarray] = []
+        self._mic_lock = threading.Lock()
+        self._mic_worker: threading.Thread | None = None
 
         self._build()
+        threading.Thread(target=self._preload_stt, daemon=True).start()
 
     def _build(self) -> None:
         self.root = tk.Tk()
@@ -226,6 +237,18 @@ class UnifiedGUI:
             cursor="hand2",
             command=self._send_reset,
         ).pack(side="right", padx=(0, 6), ipadx=12, ipady=8)
+
+        self.mic_button = tk.Button(
+            entry_container,
+            text="MIC",
+            font=("Consolas", 11, "bold"),
+            bg=self.COLORS["accent_cyan"],
+            fg=self.COLORS["bg"],
+            relief="flat",
+            cursor="hand2",
+            command=self._toggle_mic,
+        )
+        self.mic_button.pack(side="right", padx=(0, 6), ipadx=15, ipady=8)
 
         tk.Button(
             entry_container,
@@ -415,6 +438,119 @@ class UnifiedGUI:
             self.history.append(clean)
         self.history_idx = len(self.history)
 
+    def _ensure_stt(self) -> LocalSTT:
+        with self._stt_lock:
+            if self._stt is None:
+                self._stt = LocalSTT(
+                    model_size=settings.stt_model_size,
+                    device=settings.stt_device,
+                    compute_type=settings.stt_compute_type,
+                    beam_size=settings.stt_beam_size,
+                    vad_filter=settings.stt_vad_filter,
+                )
+        return self._stt
+
+    def _preload_stt(self) -> None:
+        try:
+            self._ensure_stt()
+            self.root.after(0, lambda: self._log("STT local pronto.", "system"))
+        except Exception as exc:
+            msg = f"STT indisponivel: {exc}"
+            self.root.after(0, lambda m=msg: self._log(m, "warning"))
+
+    def _refresh_mic_button(self) -> None:
+        if self._mic_state == "recording":
+            self.mic_button.configure(text="PARAR", bg=self.COLORS["accent_red"], state="normal")
+            return
+        if self._mic_state == "processing":
+            self.mic_button.configure(text="...", bg=self.COLORS["bg_tertiary"], state="disabled")
+            return
+        self.mic_button.configure(text="MIC", bg=self.COLORS["accent_cyan"], state="normal")
+
+    def _toggle_mic(self) -> None:
+        if self._mic_state == "recording":
+            self._mic_recording = False
+            self._mic_state = "processing"
+            self._refresh_mic_button()
+            self._log("Processando audio...", "system")
+            return
+
+        if self._mic_state != "idle":
+            return
+
+        self._mic_state = "recording"
+        self._mic_recording = True
+        self._mic_chunks = []
+        self._refresh_mic_button()
+        self._log("Gravacao iniciada. Clique PARAR para transcrever.", "system")
+
+        self._mic_worker = threading.Thread(target=self._record_and_transcribe, daemon=True)
+        self._mic_worker.start()
+
+    def _record_and_transcribe(self) -> None:
+        try:
+            try:
+                import sounddevice as sd
+            except ImportError as exc:
+                raise RuntimeError("Dependencia ausente para microfone. Instale: pip install '.[stt]'") from exc
+
+            def on_audio(indata: np.ndarray, frames: int, stream_time: object, status: object) -> None:
+                del frames, stream_time
+                if status:
+                    return
+                with self._mic_lock:
+                    self._mic_chunks.append(indata.copy())
+
+            with sd.InputStream(
+                samplerate=settings.mic_sample_rate,
+                channels=settings.mic_channels,
+                dtype="float32",
+                callback=on_audio,
+            ):
+                while self.running[0] and self._mic_recording:
+                    sd.sleep(100)
+
+            with self._mic_lock:
+                chunks = list(self._mic_chunks)
+                self._mic_chunks = []
+
+            if not chunks:
+                self.root.after(0, lambda: self._log("Nenhum audio capturado.", "warning"))
+                return
+
+            audio = np.concatenate(chunks, axis=0)
+            if audio.ndim > 1:
+                audio = audio.mean(axis=1)
+            audio = audio.astype(np.float32, copy=False)
+            if audio.size < settings.mic_sample_rate // 5:
+                self.root.after(0, lambda: self._log("Audio muito curto para transcricao.", "warning"))
+                return
+
+            transcribed = self._ensure_stt().transcribe_array(
+                audio=audio,
+                sample_rate=settings.mic_sample_rate,
+                language=settings.stt_language,
+            )
+            if not transcribed:
+                self.root.after(0, lambda: self._log("Nao foi possivel transcrever o audio.", "warning"))
+                return
+
+            self.root.after(0, lambda txt=transcribed: self._on_voice_transcribed(txt))
+        except Exception as exc:
+            msg = f"Erro no microfone/STT: {exc}"
+            self.root.after(0, lambda m=msg: self._log(m, "error"))
+        finally:
+            self.root.after(0, self._set_mic_idle)
+
+    def _on_voice_transcribed(self, text: str) -> None:
+        self._log(f"Transcricao: {text}", "system")
+        self._send_command(text)
+
+    def _set_mic_idle(self) -> None:
+        self._mic_recording = False
+        self._mic_state = "idle"
+        self._refresh_mic_button()
+
     def _send_reset(self) -> None:
         self._log("Reset da simulacao solicitado", "system")
         self.cmd_queue.put(RESET_SIM_CMD)
@@ -480,6 +616,7 @@ class UnifiedGUI:
 
     def _close(self) -> None:
         self.running[0] = False
+        self._mic_recording = False
         self.root.quit()
 
     def run(self) -> None:
