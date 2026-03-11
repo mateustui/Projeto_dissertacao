@@ -8,6 +8,13 @@ version = "0.1.0"
 description = "UR3 orchestrator with Gemini Robotics"
 requires-python = ">=3.11"
 
+[project.optional-dependencies]
+stt = [
+    "faster-whisper>=1.1.1",
+    "sounddevice>=0.5.2",
+    "soundfile>=0.13.1",
+]
+
 [tool.black]
 line-length = 100
 target-version = ["py311"]

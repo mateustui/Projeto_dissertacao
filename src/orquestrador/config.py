@@ -43,5 +43,14 @@ class Settings:
     altura_soltar: float = 0.01
     altura_aprox_deposito: float = 0.08
 
+    mic_sample_rate: int = int(os.getenv("MIC_SAMPLE_RATE", "16000"))
+    mic_channels: int = int(os.getenv("MIC_CHANNELS", "1"))
+    stt_language: str = os.getenv("STT_LANGUAGE", "pt")
+    stt_model_size: str = os.getenv("STT_MODEL_SIZE", "base")
+    stt_device: str = os.getenv("STT_DEVICE", "cpu")
+    stt_compute_type: str = os.getenv("STT_COMPUTE_TYPE", "int8")
+    stt_beam_size: int = int(os.getenv("STT_BEAM_SIZE", "1"))
+    stt_vad_filter: bool = os.getenv("STT_VAD_FILTER", "false").lower() in {"1", "true", "yes", "on"}
+
 
 settings = Settings()

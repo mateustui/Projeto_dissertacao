@@ -151,7 +151,7 @@ class LLMOrchestrator:
 
                 x = f(args.get("x", 0.0), 0.0)
                 y = f(args.get("y", 0.0), 0.0)
-                z = f(args.get("z", 0.1), 0.1)
+                z = f(args.get("z", 0.03), 0.03)
                 pos = np.array([x, y, z], dtype=np.float64)
                 place_result = self.robot.iniciar_depositar(pos)
                 if place_result.success and self._held_object_name:
