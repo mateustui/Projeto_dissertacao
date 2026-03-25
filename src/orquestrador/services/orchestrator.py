@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import time
+import re
+import unicodedata
 from typing import Any
 
 import numpy as np
@@ -15,6 +17,23 @@ from orquestrador.adapters.vision.stereo import StereoVision
 from orquestrador.config import settings
 from orquestrador.domain.models import ActionResult
 from orquestrador.prompts import ROBOT_API_SCHEMA
+
+
+_ALIASES_PALAVRAS = {
+    "disco": "circulo",
+    "redondo": "circulo",
+    "bola": "esfera",
+}
+
+
+def _normalizar_nome(texto: str) -> str:
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
+    texto = texto.lower().strip()
+    texto = re.sub(r"[_\-]+", " ", texto)
+    texto = re.sub(r"\s+", " ", texto)
+    palavras = [_ALIASES_PALAVRAS.get(palavra, palavra) for palavra in texto.split()]
+    return " ".join(palavras)
 
 
 class LLMOrchestrator:
@@ -121,17 +140,18 @@ class LLMOrchestrator:
 
             if func_name == "pick_object":
                 obj_name = args.get("object_name", "")
+                obj_key = _normalizar_nome(obj_name)
                 self.logger.action(f"Localizando '{obj_name}'...")
                 det_result = self.vision.detectar()
                 if det_result.success and det_result.data:
                     self.logger.vision(det_result.message)
                 result = self.vision.localizar(obj_name)
                 if not result.success:
-                    if obj_name in self._mem_pos:
+                    if obj_key in self._mem_pos:
                         self.logger.warning(
-                            f"Visao falhou para '{obj_name}'. Usando posicao em memoria: {self._mem_pos[obj_name]}"
+                            f"Visao falhou para '{obj_name}'. Usando posicao em memoria: {self._mem_pos[obj_key]}"
                         )
-                        pick_result = self.robot.iniciar_pegar(np.array(self._mem_pos[obj_name], dtype=np.float64))
+                        pick_result = self.robot.iniciar_pegar(np.array(self._mem_pos[obj_key], dtype=np.float64))
                         if pick_result.success:
                             self._held_object_name = obj_name
                         return pick_result
@@ -155,7 +175,7 @@ class LLMOrchestrator:
                 pos = np.array([x, y, z], dtype=np.float64)
                 place_result = self.robot.iniciar_depositar(pos)
                 if place_result.success and self._held_object_name:
-                    self._mem_pos[self._held_object_name] = np.array(pos, dtype=np.float64)
+                    self._mem_pos[_normalizar_nome(self._held_object_name)] = np.array(pos, dtype=np.float64)
                     self._held_object_name = None
                 return place_result
 
@@ -168,7 +188,7 @@ class LLMOrchestrator:
                 self.logger.vision(result.message)
                 place_result = self.robot.iniciar_depositar(result.data)
                 if place_result.success and self._held_object_name:
-                    self._mem_pos[self._held_object_name] = np.array(result.data, dtype=np.float64)
+                    self._mem_pos[_normalizar_nome(self._held_object_name)] = np.array(result.data, dtype=np.float64)
                     self._held_object_name = None
                 return place_result
 
@@ -208,18 +228,19 @@ class LLMOrchestrator:
                 result = self.vision.localizar(name)
                 if not result.success:
                     return result
-                self._mem_pos[key] = np.array(result.data, dtype=np.float64)
-                self.logger.vision(f"Posicao salva: {key} = {self._mem_pos[key]}")
+                self._mem_pos[_normalizar_nome(key)] = np.array(result.data, dtype=np.float64)
+                self.logger.vision(f"Posicao salva: {key} = {self._mem_pos[_normalizar_nome(key)]}")
                 return ActionResult(True, f"Posicao do '{name}' salva em '{key}'")
 
             if func_name == "place_at_saved":
                 key = args.get("key", "")
-                if key not in self._mem_pos:
+                key_normalizada = _normalizar_nome(key)
+                if key_normalizada not in self._mem_pos:
                     return ActionResult(False, f"Posicao '{key}' nao encontrada na memoria. Salve primeiro.")
-                pos = np.array(self._mem_pos[key], dtype=np.float64)
+                pos = np.array(self._mem_pos[key_normalizada], dtype=np.float64)
                 place_result = self.robot.iniciar_depositar(pos)
                 if place_result.success and self._held_object_name:
-                    self._mem_pos[self._held_object_name] = np.array(pos, dtype=np.float64)
+                    self._mem_pos[_normalizar_nome(self._held_object_name)] = np.array(pos, dtype=np.float64)
                     self._held_object_name = None
                 return place_result
 
