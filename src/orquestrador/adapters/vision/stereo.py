@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from typing import Any
 
 import cv2
@@ -14,6 +16,23 @@ from orquestrador.config import settings
 from orquestrador.core.geometry import compute_intrinsics, euler_to_rotation, triangulate
 from orquestrador.domain.models import ActionResult, Objeto3D
 from orquestrador.prompts import PROMPT_DETECTAR_OBJETOS, PROMPT_LOCALIZAR_CAMERA2
+
+
+_ALIASES_PALAVRAS = {
+    "disco": "circulo",
+    "redondo": "circulo",
+    "bola": "esfera",
+}
+
+
+def _normalizar_nome(texto: str) -> str:
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
+    texto = texto.lower().strip()
+    texto = re.sub(r"[_\-]+", " ", texto)
+    texto = re.sub(r"\s+", " ", texto)
+    palavras = [_ALIASES_PALAVRAS.get(palavra, palavra) for palavra in texto.split()]
+    return " ".join(palavras)
 
 
 class StereoVision:
@@ -159,9 +178,10 @@ class StereoVision:
             if not result.success or not self.objetos:
                 return ActionResult(False, result.message or "Nenhum objeto detectado")
 
-        nome_lower = nome.lower()
+        nome_normalizado = _normalizar_nome(nome)
         for obj in self.objetos:
-            if nome_lower in obj.label.lower():
+            label_normalizado = _normalizar_nome(obj.label)
+            if nome_normalizado in label_normalizado or label_normalizado in nome_normalizado:
                 p = obj.posicao
                 msg = (
                     f"Objeto encontrado: '{obj.label}'\n"
